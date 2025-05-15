@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: name-tracker-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python name_tracker.py
+    envVars:
+      - key: API_ID
+        fromGroup: telegram-credentials
+      - key: API_HASH
+        fromGroup: telegram-credentials
+      - key: BOT_TOKEN
+        fromGroup: telegram-credentials
+      - key: ADMIN_ID
+        fromGroup: telegram-credentials
+      - key: KEEP_ALIVE_URL
+        generateValue: https://${SERVICE_NAME}.onrender.com
+      - key: PING_INTERVAL
+        value: "300"
