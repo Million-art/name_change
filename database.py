@@ -95,17 +95,14 @@ class Database:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 
-                # Create users table with additional fields
+                # Create users table
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS users (
                         user_id INTEGER PRIMARY KEY,
                         first_name TEXT,
                         last_name TEXT,
-                        username TEXT,
-                        phone TEXT,
                         last_updated TIMESTAMP,
-                        last_checked TIMESTAMP,
-                        is_active BOOLEAN DEFAULT 1
+                        last_checked TIMESTAMP
                     )
                 ''')
                 
@@ -114,17 +111,15 @@ class Database:
                     CREATE TABLE IF NOT EXISTS groups (
                         group_id INTEGER PRIMARY KEY,
                         group_name TEXT,
-                        added_at TIMESTAMP,
-                        is_active BOOLEAN DEFAULT 1
+                        added_at TIMESTAMP
                     )
                 ''')
                 
-                # Create user_groups table for many-to-many relationship
+                # Create user_groups table
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS user_groups (
                         user_id INTEGER,
                         group_id INTEGER,
-                        added_at TIMESTAMP,
                         last_seen TIMESTAMP,
                         is_active BOOLEAN DEFAULT 1,
                         PRIMARY KEY (user_id, group_id),
@@ -152,7 +147,7 @@ class Database:
             logger.error(f"Error initializing database: {str(e)}")
             raise
 
-    def register_user(self, user_id: int, first_name: str, last_name: str, username: str, phone: str):
+    def register_user(self, user_id: int, first_name: str, last_name: str):
         """Register or update user in database"""
         try:
             with self.get_connection() as conn:
@@ -169,10 +164,6 @@ class Database:
                         changes.append(('first_name', existing_user['first_name'], first_name))
                     if existing_user['last_name'] != last_name:
                         changes.append(('last_name', existing_user['last_name'], last_name))
-                    if existing_user['username'] != username:
-                        changes.append(('username', existing_user['username'], username))
-                    if existing_user['phone'] != phone:
-                        changes.append(('phone', existing_user['phone'], phone))
                     
                     # Record changes
                     for change_type, old_value, new_value in changes:
@@ -181,19 +172,20 @@ class Database:
                             (user_id, change_type, old_value, new_value, changed_at)
                             VALUES (?, ?, ?, ?, ?)
                         ''', (user_id, change_type, old_value, new_value, datetime.now()))
+                        logger.info(f"Recorded {change_type} change for user {user_id}: {old_value} → {new_value}")
                 
                 # Update user data
                 cursor.execute('''
                     INSERT OR REPLACE INTO users 
-                    (user_id, first_name, last_name, username, phone, last_updated, last_checked)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                ''', (user_id, first_name, last_name, username, phone, datetime.now(), datetime.now()))
+                    (user_id, first_name, last_name, last_updated, last_checked)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (user_id, first_name, last_name, datetime.now(), datetime.now()))
                 
                 conn.commit()
-                return True
+                logger.debug(f"Updated user {user_id} in database")
         except Exception as e:
             logger.error(f"Error registering user: {str(e)}")
-            return False
+            raise
 
     def register_group(self, group_id: int, group_name: str):
         """Register or update group in database"""
@@ -232,10 +224,18 @@ class Database:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
+                cursor.execute('''
+                    SELECT u.*, 
+                           (SELECT COUNT(*) FROM name_changes WHERE user_id = u.user_id) as change_count
+                    FROM users u 
+                    WHERE u.user_id = ?
+                ''', (user_id,))
                 user = cursor.fetchone()
                 if user:
-                    return dict(user)  # Convert Row to dict
+                    user_dict = dict(user)
+                    logger.debug(f"Retrieved user data for {user_id}: {user_dict}")
+                    return user_dict
+                logger.debug(f"No user found with ID {user_id}")
                 return None
         except Exception as e:
             logger.error(f"Error getting user: {str(e)}")
@@ -284,68 +284,12 @@ class Database:
             logger.error(f"Error getting name changes: {str(e)}")
             return []
 
-    def export_to_json(self, filename: str):
-        """Export name changes to JSON file"""
-        try:
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                
-                # Get all name changes with user information
-                cursor.execute('''
-                    SELECT 
-                        nc.*,
-                        u.first_name,
-                        u.last_name,
-                        u.username,
-                        u.phone,
-                        GROUP_CONCAT(g.group_name) as groups
-                    FROM name_changes nc
-                    JOIN users u ON nc.user_id = u.user_id
-                    LEFT JOIN user_groups ug ON u.user_id = ug.user_id
-                    LEFT JOIN groups g ON ug.group_id = g.group_id
-                    GROUP BY nc.id
-                    ORDER BY nc.changed_at DESC
-                ''')
-                
-                changes = []
-                for row in cursor.fetchall():
-                    change = dict(row)
-                    # Format the change data
-                    formatted_change = {
-                        'user_id': change['user_id'],
-                        'user_info': {
-                            'first_name': change['first_name'],
-                            'last_name': change['last_name'],
-                            'username': change['username'],
-                            'phone': change['phone']
-                        },
-                        'change_type': change['change_type'],
-                        'old_value': change['old_value'],
-                        'new_value': change['new_value'],
-                        'changed_at': change['changed_at'],
-                        'groups': change['groups'].split(',') if change['groups'] else []
-                    }
-                    changes.append(formatted_change)
-                
-                # Add export metadata
-                export_data = {
-                    'export_date': datetime.now().isoformat(),
-                    'total_changes': len(changes),
-                    'changes': changes
-                }
-                
-                with open(filename, 'w', encoding='utf-8') as f:
-                    json.dump(export_data, f, ensure_ascii=False, indent=2)
-                return True
-        except Exception as e:
-            logger.error(f"Error exporting to JSON: {str(e)}")
-            return False
-
     def check_name_changes(self, user_id: int, current_data: Dict[str, Any]) -> Dict[str, Any]:
         """Check for name changes and return changes if any"""
         try:
             old_data = self.get_user(user_id)
             if not old_data:
+                logger.debug(f"No existing data found for user {user_id}")
                 return {}
 
             changes = {}
@@ -354,21 +298,14 @@ class Database:
                     'old': old_data['first_name'],
                     'new': current_data['first_name']
                 }
+                logger.debug(f"First name change detected for user {user_id}: {old_data['first_name']} → {current_data['first_name']}")
+            
             if old_data['last_name'] != current_data['last_name']:
                 changes['last_name'] = {
                     'old': old_data['last_name'],
                     'new': current_data['last_name']
                 }
-            if old_data['username'] != current_data['username']:
-                changes['username'] = {
-                    'old': old_data['username'],
-                    'new': current_data['username']
-                }
-            if old_data['phone'] != current_data['phone']:
-                changes['phone'] = {
-                    'old': old_data['phone'],
-                    'new': current_data['phone']
-                }
+                logger.debug(f"Last name change detected for user {user_id}: {old_data['last_name']} → {current_data['last_name']}")
 
             return changes
         except Exception as e:
