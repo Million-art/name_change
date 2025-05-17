@@ -5,14 +5,15 @@ from pathlib import Path
 from typing import Dict, Any, List
 from telethon import TelegramClient, events, types, functions
 from telethon.tl.types import User, PeerChannel, UpdateUserName, UpdateUserPhone, UpdateUser, UpdateUserStatus, UpdatePeerSettings, PeerUser
-from telethon.errors import FloodWaitError, ConnectionError
+from telethon.errors import FloodWaitError
 from dotenv import load_dotenv
 import requests
 from database import Database
 from datetime import datetime
 import time
 import json
-import sys
+from aiohttp import web
+import gc
 
 # Configure logging first
 logging.basicConfig(
@@ -39,9 +40,7 @@ class Config:
     SESSION_NAME = 'name_change_bot'
     SCAN_INTERVAL = int(os.getenv('SCAN_INTERVAL', 60))  # Changed to 1 minute for more frequent checks
     MONITORED_GROUPS = [int(x) for x in os.getenv('MONITORED_GROUPS', '').split(',') if x]
-    RENDER_MODE = os.getenv('RENDER_MODE', 'false').lower() == 'true'
-    MAX_RETRIES = 5
-    RETRY_DELAY = 30  # seconds
+    RENDER_HEALTH_CHECK = os.getenv('RENDER_HEALTH_CHECK', 'true').lower() == 'true'
 
 # Validate configuration
 if not all([Config.API_ID, Config.API_HASH, Config.BOT_TOKEN, Config.ADMIN_ID]):
@@ -52,47 +51,46 @@ if not all([Config.API_ID, Config.API_HASH, Config.BOT_TOKEN, Config.ADMIN_ID]):
     logger.error(f"ADMIN_ID: {Config.ADMIN_ID}")
     raise ValueError("Missing required environment variables")
 
-# Initialize client with retry mechanism
-async def initialize_client():
-    retries = 0
-    while retries < Config.MAX_RETRIES:
-        try:
-            client = TelegramClient(
-                Config.SESSION_NAME,
-                Config.API_ID,
-                Config.API_HASH,
-                device_model="Name Change Bot",
-                system_version="1.0",
-                app_version="1.0",
-                lang_code="en"
-            )
-            await client.start(bot_token=Config.BOT_TOKEN)
-            return client
-        except ConnectionError as e:
-            retries += 1
-            logger.error(f"Connection error (attempt {retries}/{Config.MAX_RETRIES}): {e}")
-            if retries < Config.MAX_RETRIES:
-                await asyncio.sleep(Config.RETRY_DELAY)
-            else:
-                raise
-        except Exception as e:
-            logger.error(f"Unexpected error during client initialization: {e}")
-            raise
+# Initialize client with optimized settings
+client = TelegramClient(
+    Config.SESSION_NAME,
+    Config.API_ID,
+    Config.API_HASH,
+    device_model="Name Change Bot",
+    system_version="1.0",
+    app_version="1.0",
+    lang_code="en",
+    connection_retries=5,
+    retry_delay=1,
+    auto_reconnect=True
+).start(bot_token=Config.BOT_TOKEN)
 
 # Initialize database with consistent name
-db = Database(db_name='name_change.db')  # Explicitly set database name
+db = Database(db_name='name_change.db')
 
 # Store monitored groups
 monitored_groups: List[int] = Config.MONITORED_GROUPS
 
-# Add health check endpoint for Render
-async def health_check():
-    """Simple health check endpoint for Render"""
-    try:
-        return {"status": "healthy", "timestamp": datetime.now().isoformat()}
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        return {"status": "unhealthy", "error": str(e)}
+# Health check endpoint
+async def health_check(request):
+    return web.Response(text="OK")
+
+# Setup health check server
+async def start_health_check_server():
+    if Config.RENDER_HEALTH_CHECK:
+        app = web.Application()
+        app.router.add_get('/health', health_check)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, '0.0.0.0', int(os.getenv('PORT', 8080)))
+        await site.start()
+        logger.info("Health check server started")
+
+# Memory optimization function
+def optimize_memory():
+    gc.collect()
+    if hasattr(gc, 'collect_generations'):
+        gc.collect_generations()
 
 async def periodic_scan():
     """Periodically scan all monitored groups for name changes"""
@@ -119,6 +117,9 @@ async def periodic_scan():
                     continue
         except Exception as e:
             logger.error(f"Error in periodic scan: {str(e)}")
+        
+        # Optimize memory after each scan
+        optimize_memory()
         await asyncio.sleep(Config.SCAN_INTERVAL)
 
 async def send_to_admin(message: str):
@@ -513,10 +514,10 @@ async def handle_service_message(event):
         logger.error(f"Error handling service message: {e}", exc_info=True)
 
 async def main():
-    """Main bot function with Render-specific handling"""
+    """Main bot function"""
     try:
-        # Initialize client with retry mechanism
-        client = await initialize_client()
+        # Start health check server
+        await start_health_check_server()
         
         # Ensure we're receiving updates
         me = await client.get_me()
@@ -570,39 +571,21 @@ async def main():
             f"Tracking {len(users)} users\n"
             f"Monitoring {len(monitored_groups)} groups\n"
             f"Groups in database: {total_groups}\n"
-            f"Running on Render: {'Yes' if Config.RENDER_MODE else 'No'}"
+            f"Running on Render free tier"
         )
         logger.info("Bot started and ready to track name changes!")
 
-        # Keep the bot running with periodic health checks
-        while True:
-            try:
-                # Perform health check
-                health_status = await health_check()
-                if health_status["status"] == "unhealthy":
-                    logger.error("Health check failed, attempting to reconnect...")
-                    await client.disconnect()
-                    client = await initialize_client()
-                
-                # Sleep for a short interval
-                await asyncio.sleep(30)
-            except Exception as e:
-                logger.error(f"Error in main loop: {e}", exc_info=True)
-                await asyncio.sleep(Config.RETRY_DELAY)
-
+        # Keep the bot running
+        await client.run_until_disconnected()
     except Exception as e:
         logger.error(f"Fatal error in main: {str(e)}", exc_info=True)
         raise
 
 if __name__ == '__main__':
     try:
-        # Set up asyncio event loop
-        loop = asyncio.get_event_loop()
-        
-        # Run the main function
-        loop.run_until_complete(main())
+        with client:
+            client.loop.run_until_complete(main())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
     except Exception as e:
         logger.error(f"Fatal error: {str(e)}", exc_info=True)
-        sys.exit(1)
