@@ -12,8 +12,6 @@ from database import Database
 from datetime import datetime
 import time
 import json
-from aiohttp import web
-import threading
 
 # Configure logging first
 logging.basicConfig(
@@ -38,7 +36,7 @@ class Config:
     BOT_TOKEN = os.getenv('BOT_TOKEN', '')
     ADMIN_ID = int(os.getenv('ADMIN_ID', 0))
     SESSION_NAME = 'name_change_bot'
-    SCAN_INTERVAL = int(os.getenv('SCAN_INTERVAL', 300))  # Changed to 5 minutes (300 seconds)
+    SCAN_INTERVAL = int(os.getenv('SCAN_INTERVAL', 60))  # Changed to 1 minute for more frequent checks
     MONITORED_GROUPS = [int(x) for x in os.getenv('MONITORED_GROUPS', '').split(',') if x]
 
 # Validate configuration
@@ -50,8 +48,8 @@ if not all([Config.API_ID, Config.API_HASH, Config.BOT_TOKEN, Config.ADMIN_ID]):
     logger.error(f"ADMIN_ID: {Config.ADMIN_ID}")
     raise ValueError("Missing required environment variables")
 
-# Initialize client with absolute path for session
-logger.info(f"Initializing client with session path: {Config.SESSION_NAME}")
+# Initialize client
+logger.info(f"Initializing client with session name: {Config.SESSION_NAME}")
 client = TelegramClient(
     Config.SESSION_NAME,
     Config.API_ID,
@@ -60,17 +58,13 @@ client = TelegramClient(
     system_version="1.0",
     app_version="1.0",
     lang_code="en"
-).start(bot_token=Config.BOT_TOKEN)  # Start with bot token directly
+)
 
 # Initialize database with consistent name
 db = Database(db_name='name_change.db')  # Explicitly set database name
 
 # Store monitored groups
 monitored_groups: List[int] = Config.MONITORED_GROUPS
-
-# Initialize web application for health checks
-app = web.Application()
-app.router.add_get('/health', lambda _: web.Response(text="OK"))
 
 async def periodic_scan():
     """Periodically scan all monitored groups for name changes"""
@@ -79,11 +73,22 @@ async def periodic_scan():
             logger.info("Starting periodic scan of monitored groups")
             for group_id in monitored_groups:
                 try:
-                    async for user in client.iter_participants(group_id):
+                    # Get all participants at once to reduce API calls
+                    participants = await client.get_participants(group_id)
+                    for user in participants:
                         if isinstance(user, User):
-                            await check_name_changes(user)
+                            try:
+                                await check_name_changes(user)
+                            except FloodWaitError as e:
+                                logger.warning(f"Flood wait required: {e.seconds} seconds")
+                                await asyncio.sleep(e.seconds)
+                                continue
+                            except Exception as e:
+                                logger.error(f"Error checking user {user.id}: {str(e)}")
+                                continue
                 except Exception as e:
                     logger.error(f"Error scanning group {group_id}: {str(e)}")
+                    continue
         except Exception as e:
             logger.error(f"Error in periodic scan: {str(e)}")
         await asyncio.sleep(Config.SCAN_INTERVAL)
@@ -110,69 +115,59 @@ async def check_name_changes(user: User):
 
         current_data = {
             'first_name': user.first_name,
-            'last_name': user.last_name or "",
-            'username': user.username or "",
-            'phone': user.phone or ""
+            'last_name': user.last_name or ""
         }
-        
+
         # Get user data from database
         db_user = db.get_user(user.id)
         
+        # Log the data for debugging
+        logger.debug(f"DB user data: {db_user}")
+        logger.debug(f"Current user data: {current_data}")
+
         # If user doesn't exist in database, register them
         if not db_user:
             db.register_user(
                 user_id=user.id,
                 first_name=user.first_name,
-                last_name=user.last_name or "",
-                username=user.username or "",
-                phone=user.phone or ""
+                last_name=user.last_name or ""
             )
+            logger.info(f"Registered new user {user.id} in database")
             return
-        
+
         changes = []
-        
+
         # Check first name
         if db_user['first_name'] != current_data['first_name']:
             changes.append(f"👤 First name: {db_user['first_name']} → {current_data['first_name']}")
-        
+
         # Check last name
         if db_user['last_name'] != current_data['last_name']:
             changes.append(f"👤 Last name: {db_user['last_name']} → {current_data['last_name']}")
-        
-        # Check username
-        if db_user['username'] != current_data['username']:
-            old_un = f"@{db_user['username']}" if db_user['username'] else "[no username]"
-            new_un = f"@{current_data['username']}" if current_data['username'] else "[no username]"
-            changes.append(f"🔗 Username: {old_un} → {new_un}")
-        
-        # Check phone number
-        if db_user['phone'] != current_data['phone']:
-            changes.append(f"📱 Phone: {db_user['phone']} → {current_data['phone']}")
-        
-        # Update database
-        db.register_user(
-            user_id=user.id,
-            first_name=user.first_name,
-            last_name=user.last_name or "",
-            username=user.username or "",
-            phone=user.phone or ""
-        )
-        
-        # Report changes if any
+
+        # Only update database if changes were detected
         if changes:
+            # Update database with new data
+            db.register_user(
+                user_id=user.id,
+                first_name=user.first_name,
+                last_name=user.last_name or ""
+            )
+            
             # Get user's groups for context
             user_groups = db.get_user_groups(user.id)
             group_names = [g['group_name'] for g in user_groups]
-            
+
             message = (
                 f"👤 User ID: `{user.id}`\n"
-                f"🔗 Profile: https://t.me/{user.username or ''}\n"
-                f"👥 Groups: {', '.join(group_names) if group_names else 'None'}\n\n"
+                f"👥 Groups: {', '.join(group_names) if group_names else 'None'}\n\n"    
                 + "\n".join(changes)
             )
             await send_to_admin(message)
             logger.info(f"Sent name change notification for user {user.id}")
-            
+        else:
+            logger.debug(f"No name changes detected for user {user.id}")
+
     except FloodWaitError as e:
         logger.warning(f"Flood wait required: {e.seconds} seconds")
         await asyncio.sleep(e.seconds)
@@ -190,14 +185,14 @@ async def handle_group_events(event):
             group_id = event.chat_id.channel_id
         else:
             group_id = event.chat_id
-        
+
         logger.debug(f"Processing event for group ID: {group_id}")
-        
+
         # Add group to monitored list if not already there
         if group_id not in monitored_groups:
             monitored_groups.append(group_id)
             logger.info(f"Added new group to monitoring: {group_id}")
-            
+
             # Register group in database
             try:
                 chat = await event.get_chat()
@@ -205,7 +200,7 @@ async def handle_group_events(event):
                 db.register_group(group_id, group_name)
             except Exception as e:
                 logger.error(f"Error registering group {group_id}: {e}")
-        
+
         if event.user_joined or event.user_added:
             logger.debug(f"User joined/added event detected")
             # New user - add to database
@@ -223,16 +218,16 @@ async def handle_group_events(event):
                 db.add_user_to_group(user.id, group_id)
                 logger.info(f"Added new user {user.id} to group {group_id}")
             return
-        
+
         if hasattr(event, 'user_id') and event.user_id:
-            logger.debug(f"Processing existing user event for user_id: {event.user_id}")
+            logger.debug(f"Processing existing user event for user_id: {event.user_id}") 
             # Existing user - check for changes
             user = await event.get_user()
             if user:
                 await check_name_changes(user)
                 # Update last seen in group
                 db.add_user_to_group(user.id, group_id)
-            
+
     except Exception as e:
         logger.error(f"Error in group event: {str(e)}", exc_info=True)  # Added exc_info for full traceback
 
@@ -291,11 +286,11 @@ async def handle_peer_settings_update(event):
     """Handle peer settings updates which might accompany name changes"""
     try:
         if isinstance(event.peer, PeerUser):
-            logger.info(f"Received peer settings update for user {event.peer.user_id}")
+            logger.info(f"Received peer settings update for user {event.peer.user_id}")  
             user = await client.get_entity(event.peer.user_id)
             if user:
                 await check_name_changes(user)
-                logger.info(f"Processed peer settings update for user {user.id}")
+                logger.info(f"Processed peer settings update for user {user.id}")        
     except Exception as e:
         logger.error(f"Error handling peer settings update: {e}")
 
@@ -310,55 +305,71 @@ async def start_command(event):
         # Get group information
         try:
             chat = await event.get_chat()
-            
+
             # Get the actual group ID
             if isinstance(event.chat_id, PeerChannel):
                 group_id = event.chat_id.channel_id
             else:
                 group_id = event.chat_id
-            
+
             group_name = getattr(chat, 'title', f'Group {group_id}')
-            
-            logger.info(f"Starting tracking for group: {group_name} ({group_id})")
-            
+
+            logger.info(f"Starting tracking for group: {group_name} ({group_id})")       
+
             # Register the group in database
             if not db.register_group(group_id, group_name):
                 logger.error(f"Failed to register group {group_name} ({group_id}) in database")
                 await event.reply("❌ Error registering group in database. Please try again.")
                 return
-            
+
             # Add to monitored groups if not already there
             if group_id not in monitored_groups:
                 monitored_groups.append(group_id)
-                logger.info(f"Added group to monitoring: {group_name} ({group_id})")
-            
+                logger.info(f"Added group to monitoring: {group_name} ({group_id})")     
+
             # Load all current group members into database
             count = 0
             errors = 0
+            error_details = []
+            
             try:
-                async for user in client.iter_participants(chat):
+                # Get all participants at once to reduce API calls
+                participants = await client.get_participants(chat)
+                total_participants = len(participants)
+                
+                for user in participants:
                     if isinstance(user, User):
                         try:
-                            db.register_user(
-                                user_id=user.id,
-                                first_name=user.first_name,
-                                last_name=user.last_name or "",
-                                username=user.username or "",
-                                phone=user.phone or ""
-                            )
+                            # Check if user is already in database
+                            existing_user = db.get_user(user.id)
+                            if not existing_user:
+                                # Only register new users
+                                db.register_user(
+                                    user_id=user.id,
+                                    first_name=user.first_name,
+                                    last_name=user.last_name or ""
+                                )
+                                count += 1
+                            
+                            # Add user to group regardless
                             db.add_user_to_group(user.id, group_id)
-                            count += 1
+                            
                             if count % 10 == 0:  # Log progress every 10 users
-                                logger.info(f"Processed {count} users in group {group_name}")
+                                logger.info(f"Processed {count}/{total_participants} users in group {group_name}")
+                                
                         except Exception as e:
                             errors += 1
-                            logger.error(f"Error processing user {user.id} in group {group_name}: {e}")
+                            error_msg = f"User {user.id}: {str(e)}"
+                            error_details.append(error_msg)
+                            logger.error(error_msg)
+                            
             except Exception as e:
                 logger.error(f"Error processing users in group {group_name}: {str(e)}")
-                await event.reply("⚠️ Warning: Some users could not be processed. Tracking is still active.")
-            
+                await event.reply("⚠️ Warning: Error processing users. Tracking is still active.")
+                return
+
             logger.info(f"Successfully initialized tracking in group {group_name} ({group_id}), added {count} users")
-            
+
             # Send confirmation with group details
             status_msg = [
                 f"✅ Name tracking activated!",
@@ -366,16 +377,24 @@ async def start_command(event):
                 f"ID: {group_id}",
                 f"Added {count} users to tracking."
             ]
+            
             if errors > 0:
                 status_msg.append(f"⚠️ {errors} users could not be processed.")
-            status_msg.append("I'll report name changes to the admin.")
+                if len(error_details) > 0:
+                    status_msg.append("\nError details (first 3):")
+                    for detail in error_details[:3]:
+                        status_msg.append(f"• {detail}")
+                    if len(error_details) > 3:
+                        status_msg.append(f"... and {len(error_details) - 3} more errors")
             
+            status_msg.append("\nI'll report name changes to the admin.")
+
             await event.reply("\n".join(status_msg))
-            
+
         except Exception as e:
             logger.error(f"Error getting group information: {str(e)}")
-            await event.reply("❌ Error getting group information. Please try again.")
-            
+            await event.reply("❌ Error getting group information. Please try again.")    
+
     except Exception as e:
         logger.error(f"Error in start command: {str(e)}")
         await event.reply("❌ An unexpected error occurred. Please try again.")
@@ -386,7 +405,7 @@ async def status_command(event):
     try:
         users = db.get_all_users()
         total_groups = len(set(group['group_id'] for user in users for group in user.get('groups', [])))
-        
+
         # Get group names for monitored groups
         monitored_groups_info = []
         for group_id in monitored_groups:
@@ -397,7 +416,7 @@ async def status_command(event):
             except Exception as e:
                 logger.error(f"Error getting group info for {group_id}: {e}")
                 monitored_groups_info.append(f"• Group {group_id}")
-        
+
         status_msg = [
             "📊 Status",
             f"👤 Users: {len(users)}",
@@ -405,14 +424,14 @@ async def status_command(event):
             "",
             "🎯 Monitored:"
         ]
-        
+
         if monitored_groups_info:
             status_msg.extend(monitored_groups_info)
         else:
             status_msg.append("No groups monitored")
-            
+
         status_msg.append(f"\n⏱️ Next scan: {Config.SCAN_INTERVAL//60}m")
-        
+
         await event.reply("\n".join(status_msg))
     except Exception as e:
         logger.error(f"Error in status command: {str(e)}")
@@ -422,7 +441,7 @@ async def manual_scan_command(event):
     """Trigger immediate scan of all groups"""
     try:
         if event.sender_id == Config.ADMIN_ID:
-            await event.reply("🔄 Starting manual scan of all monitored groups...")
+            await event.reply("🔄 Starting manual scan of all monitored groups...")      
             for group_id in monitored_groups:
                 try:
                     count = 0
@@ -439,70 +458,65 @@ async def manual_scan_command(event):
     except Exception as e:
         logger.error(f"Error in scan command: {str(e)}")
 
-@client.on(events.NewMessage(pattern='/export'))
-async def export_command(event):
-    """Export name changes to JSON file"""
+# Add new handler for message events that might indicate name changes
+@client.on(events.NewMessage())
+async def handle_new_message(event):
+    """Handle new messages which might indicate name changes"""
     try:
-        if event.sender_id == Config.ADMIN_ID:
-            await event.reply("🔄 Preparing name changes export...")
-            
-            filename = f"name_changes_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-            if db.export_to_json(filename):
-                # Get the total number of changes
-                with open(filename, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    total_changes = data['total_changes']
-                
-                await client.send_file(
-                    Config.ADMIN_ID,
-                    filename,
-                    caption=(
-                        f"📊 Name Changes Export\n"
-                        f"Total Changes: {total_changes}\n"
-                        f"Export Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                    )
-                )
-                os.remove(filename)  # Clean up the file after sending
-            else:
-                await event.reply("❌ Error exporting name changes")
-        else:
-            await event.reply("⛔ Only admin can request exports")
+        if event.sender_id:
+            user = await event.get_sender()
+            if isinstance(user, User):
+                await check_name_changes(user)
+                logger.debug(f"Checked name changes for user {user.id} from message")
     except Exception as e:
-        logger.error(f"Error in export command: {str(e)}")
-        await event.reply("❌ An error occurred while exporting data")
+        logger.error(f"Error handling new message: {e}", exc_info=True)
 
-async def start_web_server():
-    """Start web server for health checks"""
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', int(os.getenv('PORT', 8080)))
-    await site.start()
-    logger.info("Health check server started")
+# Add handler for service messages
+@client.on(events.ChatAction())
+async def handle_service_message(event):
+    """Handle service messages which might indicate name changes"""
+    try:
+        if event.user_id:
+            user = await event.get_user()
+            if isinstance(user, User):
+                await check_name_changes(user)
+                logger.debug(f"Checked name changes for user {user.id} from service message")
+    except Exception as e:
+        logger.error(f"Error handling service message: {e}", exc_info=True)
 
 async def main():
     """Main bot function"""
     try:
-        # Start health check server
-        await start_web_server()
-        
         # Connect and start
         logger.info("Connecting to Telegram...")
         await client.connect()
-        
+
+        # Start with bot token directly
+        logger.info("Starting with bot token...")
+        await client.sign_in(bot_token=Config.BOT_TOKEN)
+
         # Ensure we're receiving updates
         me = await client.get_me()
         logger.info(f"Connected as {me.username}")
-        
-        # Set up update receiving with more detailed logging
+
+        # Set up update receiving with more detailed logging and state management
         try:
             state = await client(functions.updates.GetStateRequest())
             logger.info(f"Successfully set up update receiving. State: {state}")
+            
+            # Set up update handling with proper state management
+            await client(functions.updates.GetDifferenceRequest(
+                pts=state.pts,
+                date=state.date,
+                qts=state.qts
+            ))
+            logger.info("Successfully synchronized update state")
         except Exception as e:
             logger.error(f"Could not get update state: {e}", exc_info=True)
-        
+
         # Start background tasks
         asyncio.create_task(periodic_scan())
-        
+
         # Initialize monitored groups from database
         users = db.get_all_users()
         if users:
@@ -511,7 +525,7 @@ async def main():
             for user in users:
                 for group in user.get('groups', []):
                     db_groups.add(group['group_id'])
-            
+
             # Add any groups from database that aren't in monitored_groups
             for group_id in db_groups:
                 if group_id not in monitored_groups:
@@ -523,7 +537,7 @@ async def main():
                         logger.info(f"Added existing group {group_name} ({group_id}) to monitoring")
                     except Exception as e:
                         logger.error(f"Error getting group info for {group_id}: {e}", exc_info=True)
-        
+
         # Send startup message with current status
         users = db.get_all_users()
         total_groups = len(set(group['group_id'] for user in users for group in user.get('groups', [])))
@@ -535,7 +549,7 @@ async def main():
             f"Groups in database: {total_groups}"
         )
         logger.info("Bot started and ready to track name changes!")
-        
+
         # Keep the bot running
         await client.run_until_disconnected()
     except Exception as e:
