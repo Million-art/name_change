@@ -58,7 +58,7 @@ client = TelegramClient(
     system_version="1.0",
     app_version="1.0",
     lang_code="en"
-)
+).start(bot_token=Config.BOT_TOKEN)  # Start with bot token directly
 
 # Initialize database with consistent name
 db = Database(db_name='name_change.db')  # Explicitly set database name
@@ -487,14 +487,6 @@ async def handle_service_message(event):
 async def main():
     """Main bot function"""
     try:
-        # Connect and start
-        logger.info("Connecting to Telegram...")
-        await client.connect()
-
-        # Start with bot token directly
-        logger.info("Starting with bot token...")
-        await client.sign_in(bot_token=Config.BOT_TOKEN)
-
         # Ensure we're receiving updates
         me = await client.get_me()
         logger.info(f"Connected as {me.username}")
@@ -557,5 +549,10 @@ async def main():
         raise
 
 if __name__ == '__main__':
-    with client:
-        client.loop.run_until_complete(main())
+    try:
+        with client:
+            client.loop.run_until_complete(main())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Fatal error: {str(e)}", exc_info=True)
