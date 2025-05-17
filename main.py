@@ -50,8 +50,8 @@ if not all([Config.API_ID, Config.API_HASH, Config.BOT_TOKEN, Config.ADMIN_ID]):
     logger.error(f"ADMIN_ID: {Config.ADMIN_ID}")
     raise ValueError("Missing required environment variables")
 
-# Initialize client
-logger.info(f"Initializing client with session name: {Config.SESSION_NAME}")
+# Initialize client with absolute path for session
+logger.info(f"Initializing client with session path: {Config.SESSION_NAME}")
 client = TelegramClient(
     Config.SESSION_NAME,
     Config.API_ID,
@@ -60,7 +60,7 @@ client = TelegramClient(
     system_version="1.0",
     app_version="1.0",
     lang_code="en"
-)
+).start(bot_token=Config.BOT_TOKEN)  # Start with bot token directly
 
 # Initialize database with consistent name
 db = Database(db_name='name_change.db')  # Explicitly set database name
@@ -488,12 +488,6 @@ async def main():
         # Connect and start
         logger.info("Connecting to Telegram...")
         await client.connect()
-        
-        # Check if we need to sign in
-        if not await client.is_user_authorized():
-            logger.info("Not authorized, signing in with bot token...")
-            await client.sign_in(bot_token=Config.BOT_TOKEN)
-            logger.info("Successfully signed in")
         
         # Ensure we're receiving updates
         me = await client.get_me()
