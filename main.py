@@ -60,7 +60,7 @@ client = TelegramClient(
     connection_retries=5,
     retry_delay=1,
     auto_reconnect=True
-).start(bot_token=Config.BOT_TOKEN)
+)
 
 # Initialize database with consistent name
 db = Database(db_name='name_change.db')
@@ -637,6 +637,17 @@ async def send_ping():
 async def main():
     """Main bot function"""
     try:
+        # Force bot login
+        await client.start(bot_token=Config.BOT_TOKEN)
+        
+        # Verify bot is properly logged in
+        me = await client.get_me()
+        if not me.bot:
+            logger.error("Failed to login as bot!")
+            raise Exception("Bot login failed")
+            
+        logger.info(f"Successfully logged in as bot: @{me.username}")
+        
         # Start health check server
         await start_health_check_server()
         
@@ -644,10 +655,6 @@ async def main():
         asyncio.create_task(send_ping())
         
         # Ensure we're receiving updates
-        me = await client.get_me()
-        logger.info(f"Connected as {me.username}")
-
-        # Set up update receiving with more detailed logging and state management
         try:
             state = await client(functions.updates.GetStateRequest())
             logger.info(f"Successfully set up update receiving. State: {state}")
@@ -707,8 +714,13 @@ async def main():
 
 if __name__ == '__main__':
     try:
-        with client:
-            client.loop.run_until_complete(main())
+        # Delete existing session file if it exists
+        session_file = f"{Config.SESSION_NAME}.session"
+        if os.path.exists(session_file):
+            os.remove(session_file)
+            logger.info(f"Removed existing session file: {session_file}")
+            
+        client.loop.run_until_complete(main())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
     except Exception as e:

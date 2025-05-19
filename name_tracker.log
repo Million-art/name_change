@@ -66,3 +66,14 @@
 [INFO] 2025-05-19 13:05:45,775 - Disconnecting from 149.154.167.92:443/TcpFull...
 [INFO] 2025-05-19 13:05:45,775 - Disconnection from 149.154.167.92:443/TcpFull complete!
 [INFO] 2025-05-19 13:05:45,796 - Bot stopped by user
+[INFO] 2025-05-19 13:28:57,720 - Loading environment from: C:\Users\dell\Desktop\name_change\.env
+[INFO] 2025-05-19 13:28:57,779 - Connecting to 149.154.167.92:443/TcpFull...
+[INFO] 2025-05-19 13:28:57,957 - Connection to 149.154.167.92:443/TcpFull complete!
+[INFO] 2025-05-19 13:28:58,973 - Initializing database at: C:\Users\dell\Desktop\name_change\name_change.db
+[INFO] 2025-05-19 13:28:58,973 - Database initialized successfully
+[INFO] 2025-05-19 13:28:58,973 - Database initialized successfully
+[INFO] 2025-05-19 13:28:58,997 - Database migration completed successfully
+[INFO] 2025-05-19 13:28:59,221 - Health check server started on port 8080
+[INFO] 2025-05-19 13:29:29,014 - Disconnecting from 149.154.167.92:443/TcpFull...
+[INFO] 2025-05-19 13:29:29,016 - Disconnection from 149.154.167.92:443/TcpFull complete!
+[INFO] 2025-05-19 13:29:29,043 - Bot stopped by user
