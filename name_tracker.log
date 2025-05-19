@@ -1,0 +1,68 @@
+[INFO] 2025-05-19 12:45:16,400 - Loading environment from: C:\Users\dell\Desktop\name_change\.env
+[INFO] 2025-05-19 12:45:16,615 - Connecting to 149.154.167.51:443/TcpFull...
+[INFO] 2025-05-19 12:45:19,434 - Connection to 149.154.167.51:443/TcpFull complete!
+[INFO] 2025-05-19 12:45:20,824 - Phone migrated to 4
+[INFO] 2025-05-19 12:45:20,824 - Reconnecting to new data center 4
+[INFO] 2025-05-19 12:45:21,084 - Disconnecting from 149.154.167.51:443/TcpFull...
+[INFO] 2025-05-19 12:45:21,084 - Disconnection from 149.154.167.51:443/TcpFull complete!
+[INFO] 2025-05-19 12:45:21,084 - Connecting to 149.154.167.92:443/TcpFull...
+[INFO] 2025-05-19 12:45:23,445 - Connection to 149.154.167.92:443/TcpFull complete!
+[INFO] 2025-05-19 12:45:24,638 - Initializing database at: C:\Users\dell\Desktop\name_change\name_change.db
+[INFO] 2025-05-19 12:45:24,713 - Database initialized successfully
+[INFO] 2025-05-19 12:45:24,713 - Database initialized successfully
+[INFO] 2025-05-19 12:45:24,713 - Adding is_active column to users table
+[INFO] 2025-05-19 12:45:24,746 - Adding is_active column to groups table
+[INFO] 2025-05-19 12:45:24,764 - Database migration completed successfully
+[INFO] 2025-05-19 12:45:25,001 - Health check server started on port 8080
+[INFO] 2025-05-19 12:45:43,926 - Added new group to monitoring: -1002638325606
+[INFO] 2025-05-19 12:45:43,949 - Successfully registered group: testing (-1002638325606)
+[INFO] 2025-05-19 12:45:43,962 - Removed user 7142712071 from group -1002638325606
+[INFO] 2025-05-19 12:45:43,962 - Removed user 7142712071 from group -1002638325606
+[INFO] 2025-05-19 12:45:44,626 - Notified admin about user 7142712071 leaving group testing
+[INFO] 2025-05-19 12:45:44,635 - Notified admin about user 7142712071 leaving group testing
+[INFO] 2025-05-19 12:56:32,971 - Starting tracking for group: testing (-1002638325606)
+[INFO] 2025-05-19 12:56:33,240 - Successfully registered group: testing (-1002638325606)
+[INFO] 2025-05-19 12:56:35,685 - Successfully initialized tracking in group testing (-1002638325606), added 7 users
+[INFO] 2025-05-19 13:00:44,227 - Got difference for account updates
+[INFO] 2025-05-19 13:00:44,234 - Removed user 7142712071 from group -1002638325606
+[INFO] 2025-05-19 13:00:44,694 - Notified admin about user 7142712071 leaving group testing
+[INFO] 2025-05-19 13:00:47,416 - Received username update for user 7504894451
+[INFO] 2025-05-19 13:00:47,648 - Recorded first_name change for user 7504894451: referral -> testing2
+[INFO] 2025-05-19 13:00:48,188 - Sent name change notification for user 7504894451
+[INFO] 2025-05-19 13:00:48,189 - Processed username update for user 7504894451
+[INFO] 2025-05-19 13:01:13,628 - Starting tracking for group: testing (-1002638325606)
+[INFO] 2025-05-19 13:01:13,899 - Successfully registered group: testing (-1002638325606)
+[INFO] 2025-05-19 13:01:14,405 - Processed 0/7 users in group testing
+[INFO] 2025-05-19 13:01:14,428 - Processed 0/7 users in group testing
+[INFO] 2025-05-19 13:01:14,449 - Processed 0/7 users in group testing
+[INFO] 2025-05-19 13:01:14,474 - Processed 0/7 users in group testing
+[INFO] 2025-05-19 13:01:14,499 - Processed 0/7 users in group testing
+[INFO] 2025-05-19 13:01:14,521 - Processed 0/7 users in group testing
+[INFO] 2025-05-19 13:01:14,544 - Processed 0/7 users in group testing
+[INFO] 2025-05-19 13:01:14,545 - Successfully initialized tracking in group testing (-1002638325606), added 0 users
+[INFO] 2025-05-19 13:02:11,609 - Received username update for user 7142712071
+[INFO] 2025-05-19 13:02:11,855 - Processed username update for user 7142712071
+[INFO] 2025-05-19 13:02:30,720 - Starting tracking for group: testing2 (-4969219760)
+[INFO] 2025-05-19 13:02:30,779 - Successfully registered group: testing2 (-4969219760)
+[INFO] 2025-05-19 13:02:30,780 - Added group to monitoring: testing2 (-4969219760)
+[INFO] 2025-05-19 13:02:31,044 - Processed 0/3 users in group testing2
+[INFO] 2025-05-19 13:02:31,067 - Processed 0/3 users in group testing2
+[INFO] 2025-05-19 13:02:31,091 - Processed 0/3 users in group testing2
+[INFO] 2025-05-19 13:02:31,092 - Successfully initialized tracking in group testing2 (-4969219760), added 0 users
+[INFO] 2025-05-19 13:02:45,684 - Added new user 7142712071 to group -1002638325606
+[INFO] 2025-05-19 13:02:46,453 - Got difference for account updates
+[INFO] 2025-05-19 13:02:46,492 - Added new user 7142712071 to group -1002638325606
+[INFO] 2025-05-19 13:03:17,899 - Received username update for user 7142712071
+[INFO] 2025-05-19 13:03:18,132 - Recorded last_name change for user 7142712071:  -> Technology
+[INFO] 2025-05-19 13:03:18,622 - Sent name change notification for user 7142712071
+[INFO] 2025-05-19 13:03:18,623 - Processed username update for user 7142712071
+[INFO] 2025-05-19 13:03:50,552 - Removed user 7142712071 from group -1002638325606
+[INFO] 2025-05-19 13:03:51,049 - Got difference for account updates
+[INFO] 2025-05-19 13:03:51,281 - Removed user 7142712071 from group -1002638325606
+[INFO] 2025-05-19 13:03:51,292 - Notified admin about user 7142712071 leaving group testing
+[INFO] 2025-05-19 13:03:51,819 - Notified admin about user 7142712071 leaving group testing
+[INFO] 2025-05-19 13:04:03,163 - Received username update for user 7142712071
+[INFO] 2025-05-19 13:04:03,427 - Processed username update for user 7142712071
+[INFO] 2025-05-19 13:05:45,775 - Disconnecting from 149.154.167.92:443/TcpFull...
+[INFO] 2025-05-19 13:05:45,775 - Disconnection from 149.154.167.92:443/TcpFull complete!
+[INFO] 2025-05-19 13:05:45,796 - Bot stopped by user

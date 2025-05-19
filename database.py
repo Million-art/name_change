@@ -162,6 +162,11 @@ class Database:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 
+                # Ensure we have valid values
+                first_name = first_name or "Unknown"  # Use "Unknown" if first_name is None or empty
+                last_name = last_name or ""  # Use empty string if last_name is None
+                username = username or ""  # Use empty string if username is None
+                
                 # Get existing user data
                 cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
                 existing_user = cursor.fetchone()
@@ -173,8 +178,8 @@ class Database:
                         changes.append(('first_name', existing_user['first_name'], first_name))
                     if existing_user['last_name'] != last_name:
                         changes.append(('last_name', existing_user['last_name'], last_name))
-                    if username and existing_user.get('username') != username:
-                        changes.append(('username', existing_user.get('username', ''), username))
+                    if username and existing_user['username'] != username:
+                        changes.append(('username', existing_user['username'], username))
                     
                     # Record changes
                     for change_type, old_value, new_value in changes:
@@ -183,7 +188,7 @@ class Database:
                             (user_id, change_type, old_value, new_value, changed_at)
                             VALUES (?, ?, ?, ?, ?)
                         ''', (user_id, change_type, old_value, new_value, datetime.now()))
-                        logger.info(f"Recorded {change_type} change for user {user_id}: {old_value} → {new_value}")
+                        logger.info(f"Recorded {change_type} change for user {user_id}: {old_value} -> {new_value}")
                 
                 # Update user data
                 cursor.execute('''
@@ -320,16 +325,69 @@ class Database:
                     'old': old_data['first_name'],
                     'new': current_data['first_name']
                 }
-                logger.debug(f"First name change detected for user {user_id}: {old_data['first_name']} → {current_data['first_name']}")
+                logger.debug(f"First name change detected for user {user_id}: {old_data['first_name']} -> {current_data['first_name']}")
             
             if old_data['last_name'] != current_data['last_name']:
                 changes['last_name'] = {
                     'old': old_data['last_name'],
                     'new': current_data['last_name']
                 }
-                logger.debug(f"Last name change detected for user {user_id}: {old_data['last_name']} → {current_data['last_name']}")
+                logger.debug(f"Last name change detected for user {user_id}: {old_data['last_name']} -> {current_data['last_name']}")
 
             return changes
         except Exception as e:
             logger.error(f"Error checking name changes: {str(e)}")
-            return {} 
+            return {}
+
+    def remove_user_from_group(self, user_id: int, group_id: int):
+        """Remove user from group and mark as inactive"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                # Update user_groups to mark as inactive
+                cursor.execute('''
+                    UPDATE user_groups 
+                    SET is_active = 0, last_seen = ?
+                    WHERE user_id = ? AND group_id = ?
+                ''', (datetime.now(), user_id, group_id))
+                
+                # Check if user is in any other active groups
+                cursor.execute('''
+                    SELECT COUNT(*) as active_groups
+                    FROM user_groups
+                    WHERE user_id = ? AND is_active = 1
+                ''', (user_id,))
+                result = cursor.fetchone()
+                
+                # If user is not in any active groups, mark user as inactive
+                if result['active_groups'] == 0:
+                    cursor.execute('''
+                        UPDATE users
+                        SET is_active = 0
+                        WHERE user_id = ?
+                    ''', (user_id,))
+                
+                conn.commit()
+                logger.info(f"Removed user {user_id} from group {group_id}")
+                return True
+        except Exception as e:
+            logger.error(f"Error removing user from group: {str(e)}")
+            return False
+
+    def get_user_active_groups(self, user_id: int):
+        """Get all active groups a user belongs to"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT g.group_id, g.group_name
+                    FROM groups g
+                    JOIN user_groups ug ON g.group_id = ug.group_id
+                    WHERE ug.user_id = ? 
+                    AND ug.is_active = 1 
+                    AND g.is_active = 1
+                ''', (user_id,))
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"Error getting user active groups: {str(e)}")
+            return [] 

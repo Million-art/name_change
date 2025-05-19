@@ -9,7 +9,7 @@ from telethon.errors import FloodWaitError
 from dotenv import load_dotenv
 from database import Database
 from datetime import datetime
-from aiohttp import web
+from aiohttp import web, ClientSession
 import gc
 
 # Configure logging first
@@ -163,6 +163,12 @@ async def check_name_changes(user: User):
         if not user:
             return
 
+        # First check if user is in any active monitored groups
+        active_groups = db.get_user_active_groups(user.id)
+        if not active_groups:
+            logger.debug(f"User {user.id} is not in any active monitored groups, skipping name check")
+            return
+
         current_data = {
             'first_name': user.first_name,
             'last_name': user.last_name or ""
@@ -189,11 +195,11 @@ async def check_name_changes(user: User):
 
         # Check first name
         if db_user['first_name'] != current_data['first_name']:
-            changes.append(f"👤 First name: {db_user['first_name']} → {current_data['first_name']}")
+            changes.append(f"👤 First name: {db_user['first_name']} -> {current_data['first_name']}")
 
         # Check last name
         if db_user['last_name'] != current_data['last_name']:
-            changes.append(f"👤 Last name: {db_user['last_name']} → {current_data['last_name']}")
+            changes.append(f"👤 Last name: {db_user['last_name']} -> {current_data['last_name']}")
 
         # Only update database if changes were detected
         if changes:
@@ -204,9 +210,8 @@ async def check_name_changes(user: User):
                 last_name=user.last_name or ""
             )
             
-            # Get user's groups for context
-            user_groups = db.get_user_groups(user.id)
-            group_names = [g['group_name'] for g in user_groups]
+            # Get user's active groups for context
+            group_names = [g['group_name'] for g in active_groups]
 
             message = (
                 f"👤 User ID: `{user.id}`\n"
@@ -224,6 +229,46 @@ async def check_name_changes(user: User):
         await check_name_changes(user)  # Retry after waiting
     except Exception as e:
         logger.error(f"Error checking name changes: {e}")
+
+async def notify_user_left(user_id: int, group_id: int, group_name: str):
+    """Notify admin when a user leaves a group"""
+    try:
+        # Get user info
+        user = await client.get_entity(user_id)
+        if not user:
+            return
+
+        # Get user's remaining active groups
+        remaining_groups = db.get_user_active_groups(user_id)
+        remaining_group_names = [g['group_name'] for g in remaining_groups]
+
+        # Create direct chat link
+        chat_link = f"tg://user?id={user_id}"
+
+        message = (
+            "👋 User Left Group Notification\n"
+            "━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 User: {user.first_name} {user.last_name or ''}\n"
+            f"🆔 User ID: `{user_id}`\n"
+            f"🚪 Left Group: {group_name}\n"
+            f"💬 [Click to Chat]({chat_link})\n"
+        )
+
+        if remaining_groups:
+            message += f"\n📋 Still in groups:\n• " + "\n• ".join(remaining_group_names)
+        else:
+            message += "\n⚠️ User is no longer in any monitored groups"
+
+        # Send message with parse_mode to enable the link
+        await client.send_message(
+            Config.ADMIN_ID,
+            message,
+            parse_mode='markdown',
+            link_preview=False
+        )
+        logger.info(f"Notified admin about user {user_id} leaving group {group_name}")
+    except Exception as e:
+        logger.error(f"Error notifying about user leaving: {str(e)}")
 
 @client.on(events.ChatAction())
 async def handle_group_events(event):
@@ -250,6 +295,23 @@ async def handle_group_events(event):
                 db.register_group(group_id, group_name)
             except Exception as e:
                 logger.error(f"Error registering group {group_id}: {e}")
+
+        # Handle user leaving
+        if event.user_left or event.user_kicked:
+            logger.debug(f"User left/kicked event detected")
+            if hasattr(event, 'user_id') and event.user_id:
+                user_id = event.user_id
+                try:
+                    chat = await event.get_chat()
+                    group_name = getattr(chat, 'title', f'Group {group_id}')
+                    
+                    # Remove user from group in database
+                    if db.remove_user_from_group(user_id, group_id):
+                        # Notify admin
+                        await notify_user_left(user_id, group_id, group_name)
+                except Exception as e:
+                    logger.error(f"Error handling user leaving: {str(e)}")
+            return
 
         if event.user_joined or event.user_added:
             logger.debug(f"User joined/added event detected")
@@ -381,15 +443,34 @@ async def start_command(event):
                             existing_user = db.get_user(user.id)
                             if not existing_user:
                                 # Only register new users
-                                db.register_user(
-                                    user_id=user.id,
-                                    first_name=user.first_name,
-                                    last_name=user.last_name or ""
-                                )
-                                count += 1
+                                try:
+                                    # Ensure we have valid values
+                                    first_name = user.first_name or "Unknown"
+                                    last_name = user.last_name or ""
+                                    username = user.username or ""
+                                    
+                                    db.register_user(
+                                        user_id=user.id,
+                                        first_name=first_name,
+                                        last_name=last_name,
+                                        username=username
+                                    )
+                                    count += 1
+                                except Exception as e:
+                                    errors += 1
+                                    error_msg = f"User {user.id}: {str(e)}"
+                                    error_details.append(error_msg)
+                                    logger.error(error_msg)
+                                    continue
                             
                             # Add user to group regardless
-                            db.add_user_to_group(user.id, group_id)
+                            try:
+                                db.add_user_to_group(user.id, group_id)
+                            except Exception as e:
+                                errors += 1
+                                error_msg = f"Error adding user {user.id} to group: {str(e)}"
+                                error_details.append(error_msg)
+                                logger.error(error_msg)
                             
                             if count % 10 == 0:  # Log progress every 10 users
                                 logger.info(f"Processed {count}/{total_participants} users in group {group_name}")
@@ -521,11 +602,46 @@ async def handle_service_message(event):
     except Exception as e:
         logger.error(f"Error handling service message: {e}", exc_info=True)
 
+async def send_ping():
+    """Send periodic ping to keep the server alive"""
+    while True:
+        try:
+            async with ClientSession() as session:
+                # Get the current time
+                current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
+                # Send ping to a reliable service
+                async with session.get('https://api.telegram.org') as response:
+                    if response.status == 200:
+                        logger.info(f"🟢 Ping successful at {current_time}")
+                    else:
+                        logger.warning(f"⚠️ Ping failed with status {response.status} at {current_time}")
+                
+                # Also send a message to admin for monitoring
+                try:
+                    await client.send_message(
+                        Config.ADMIN_ID,
+                        f"🟢 Server ping at {current_time}\n"
+                        f"Status: Active\n"
+                        f"Monitored Groups: {len(monitored_groups)}"
+                    )
+                except Exception as e:
+                    logger.error(f"Error sending ping message to admin: {str(e)}")
+                
+        except Exception as e:
+            logger.error(f"Error in ping mechanism: {str(e)}")
+        
+        # Wait for 5 minutes
+        await asyncio.sleep(300)  # 300 seconds = 5 minutes
+
 async def main():
     """Main bot function"""
     try:
         # Start health check server
         await start_health_check_server()
+        
+        # Start ping mechanism
+        asyncio.create_task(send_ping())
         
         # Ensure we're receiving updates
         me = await client.get_me()
