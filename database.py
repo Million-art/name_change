@@ -1,5 +1,4 @@
 import sqlite3
-import json
 import logging
 import os
 from typing import Dict, Any
@@ -23,7 +22,7 @@ class Database:
         """Get database connection with proper row factory"""
         try:
             conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row  # This enables column access by name
+            conn.row_factory = sqlite3.Row 
             return conn
         except Exception as e:
             logger.error(f"Error connecting to database at {self.db_path}: {str(e)}")
@@ -47,6 +46,10 @@ class Database:
                     logger.info("Adding last_checked column to users table")
                     cursor.execute('ALTER TABLE users ADD COLUMN last_checked TIMESTAMP')
                 
+                if 'username' not in columns:
+                    logger.info("Adding username column to users table")
+                    cursor.execute('ALTER TABLE users ADD COLUMN username TEXT')
+                
                 # Check if is_active column exists in groups table
                 cursor.execute("PRAGMA table_info(groups)")
                 columns = [column[1] for column in cursor.fetchall()]
@@ -66,6 +69,10 @@ class Database:
                 if 'is_active' not in columns:
                     logger.info("Adding is_active column to user_groups table")
                     cursor.execute('ALTER TABLE user_groups ADD COLUMN is_active BOOLEAN DEFAULT 1')
+                
+                if 'added_at' not in columns:
+                    logger.info("Adding added_at column to user_groups table")
+                    cursor.execute('ALTER TABLE user_groups ADD COLUMN added_at TIMESTAMP')
                 
                 # Check if name_changes table exists
                 cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='name_changes'")
@@ -101,6 +108,7 @@ class Database:
                         user_id INTEGER PRIMARY KEY,
                         first_name TEXT,
                         last_name TEXT,
+                        username TEXT,
                         last_updated TIMESTAMP,
                         last_checked TIMESTAMP
                     )
@@ -122,6 +130,7 @@ class Database:
                         group_id INTEGER,
                         last_seen TIMESTAMP,
                         is_active BOOLEAN DEFAULT 1,
+                        added_at TIMESTAMP,
                         PRIMARY KEY (user_id, group_id),
                         FOREIGN KEY (user_id) REFERENCES users(user_id),
                         FOREIGN KEY (group_id) REFERENCES groups(group_id)
@@ -147,7 +156,7 @@ class Database:
             logger.error(f"Error initializing database: {str(e)}")
             raise
 
-    def register_user(self, user_id: int, first_name: str, last_name: str):
+    def register_user(self, user_id: int, first_name: str, last_name: str, username: str = None):
         """Register or update user in database"""
         try:
             with self.get_connection() as conn:
@@ -164,6 +173,8 @@ class Database:
                         changes.append(('first_name', existing_user['first_name'], first_name))
                     if existing_user['last_name'] != last_name:
                         changes.append(('last_name', existing_user['last_name'], last_name))
+                    if username and existing_user.get('username') != username:
+                        changes.append(('username', existing_user.get('username', ''), username))
                     
                     # Record changes
                     for change_type, old_value, new_value in changes:
@@ -177,9 +188,9 @@ class Database:
                 # Update user data
                 cursor.execute('''
                     INSERT OR REPLACE INTO users 
-                    (user_id, first_name, last_name, last_updated, last_checked)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (user_id, first_name, last_name, datetime.now(), datetime.now()))
+                    (user_id, first_name, last_name, username, last_updated, last_checked)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (user_id, first_name, last_name, username, datetime.now(), datetime.now()))
                 
                 conn.commit()
                 logger.debug(f"Updated user {user_id} in database")
@@ -190,14 +201,19 @@ class Database:
     def register_group(self, group_id: int, group_name: str):
         """Register or update group in database"""
         try:
+            if not group_name:
+                logger.warning(f"Attempted to register group {group_id} with empty name")
+                return False
+                
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT OR REPLACE INTO groups 
                     (group_id, group_name, added_at, is_active)
                     VALUES (?, ?, ?, 1)
-                ''', (group_id, group_name, datetime.now()))
+                ''', (group_id, group_name.strip(), datetime.now()))
                 conn.commit()
+                logger.info(f"Successfully registered group: {group_name} ({group_id})")
                 return True
         except Exception as e:
             logger.error(f"Error registering group: {str(e)}")
@@ -258,12 +274,18 @@ class Database:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT g.group_id, g.group_name 
+                    SELECT g.group_id, g.group_name, g.is_active
                     FROM groups g
                     JOIN user_groups ug ON g.group_id = ug.group_id
-                    WHERE ug.user_id = ? AND ug.is_active = 1 AND g.is_active = 1
+                    WHERE ug.user_id = ? 
+                    AND ug.is_active = 1 
+                    AND g.is_active = 1
+                    AND g.group_name IS NOT NULL
                 ''', (user_id,))
-                return [dict(row) for row in cursor.fetchall()]
+                groups = [dict(row) for row in cursor.fetchall()]
+                if not groups:
+                    logger.debug(f"No active groups found for user {user_id}")
+                return groups
         except Exception as e:
             logger.error(f"Error getting user groups: {str(e)}")
             return []

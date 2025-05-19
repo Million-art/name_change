@@ -4,14 +4,11 @@ import asyncio
 from pathlib import Path
 from typing import Dict, Any, List
 from telethon import TelegramClient, events, types, functions
-from telethon.tl.types import User, PeerChannel, UpdateUserName, UpdateUserPhone, UpdateUser, UpdateUserStatus, UpdatePeerSettings, PeerUser
+from telethon.tl.types import User, PeerChannel, UpdateUserName, UpdateUser, UpdateUserStatus, UpdatePeerSettings, PeerUser
 from telethon.errors import FloodWaitError
 from dotenv import load_dotenv
-import requests
 from database import Database
 from datetime import datetime
-import time
-import json
 from aiohttp import web
 import gc
 
@@ -73,10 +70,27 @@ monitored_groups: List[int] = Config.MONITORED_GROUPS
 
 # Health check endpoint
 async def health_check(request):
-    return web.Response(text="OK")
+    """Health check endpoint for Render.com"""
+    try:
+        # Check if client is connected
+        if not client.is_connected():
+            return web.Response(status=503, text="Bot not connected")
+        
+        # Check if database is accessible
+        try:
+            db.get_connection()
+        except Exception as e:
+            logger.error(f"Database health check failed: {str(e)}")
+            return web.Response(status=503, text="Database not accessible")
+            
+        return web.Response(text="OK")
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+        return web.Response(status=503, text="Service unhealthy")
 
 # Setup health check server
 async def start_health_check_server():
+    """Start the health check server"""
     if Config.RENDER_HEALTH_CHECK:
         app = web.Application()
         app.router.add_get('/health', health_check)
@@ -84,7 +98,14 @@ async def start_health_check_server():
         await runner.setup()
         site = web.TCPSite(runner, '0.0.0.0', int(os.getenv('PORT', 8080)))
         await site.start()
-        logger.info("Health check server started")
+        logger.info("Health check server started on port 8080")
+        
+        # Keep the server running
+        while True:
+            await asyncio.sleep(30)  # Check every 30 seconds
+            if not client.is_connected():
+                logger.warning("Bot disconnected, attempting to reconnect...")
+                await client.connect()
 
 # Memory optimization function
 def optimize_memory():
@@ -240,8 +261,7 @@ async def handle_group_events(event):
                     user_id=user.id,
                     first_name=user.first_name,
                     last_name=user.last_name or "",
-                    username=user.username or "",
-                    phone=user.phone or ""
+                    username=user.username or ""
                 )
                 # Add user to group in database
                 db.add_user_to_group(user.id, group_id)
@@ -258,7 +278,7 @@ async def handle_group_events(event):
                 db.add_user_to_group(user.id, group_id)
 
     except Exception as e:
-        logger.error(f"Error in group event: {str(e)}", exc_info=True)  # Added exc_info for full traceback
+        logger.error(f"Error in group event: {str(e)}", exc_info=True)
 
 @client.on(events.Raw(UpdateUserName))
 async def handle_username_update(event):
@@ -273,21 +293,9 @@ async def handle_username_update(event):
     except Exception as e:
         logger.error(f"Error handling username update: {e}", exc_info=True)
 
-@client.on(events.Raw(UpdateUserPhone))
-async def handle_phone_update(event):
-    """Handle phone number changes specifically"""
-    try:
-        logger.info(f"Received phone update for user {event.user_id}")
-        user = await client.get_entity(event.user_id)
-        if user:
-            await check_name_changes(user)
-            logger.info(f"Processed phone update for user {user.id}")
-    except Exception as e:
-        logger.error(f"Error handling phone update: {e}")
-
 @client.on(events.Raw(UpdateUser))
 async def handle_user_update(event):
-    """Handle general user profile updates"""
+    """Handle general user profile updates including phone changes"""
     try:
         logger.debug(f"Received user update event: {event}")
         logger.info(f"Received user update for user {event.user_id}")

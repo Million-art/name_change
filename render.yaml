@@ -10,4 +10,15 @@ services:
       - key: RENDER_HEALTH_CHECK
         value: "true"
     healthCheckPath: /health
-    autoDeploy: true 
+    autoDeploy: true
+    plan: free
+    # Prevent service from sleeping
+    numInstances: 1
+    # Configure health check
+    healthCheckPath: /health
+    healthCheckTimeout: 10
+    healthCheckInterval: 30
+    # Keep the service alive
+    envVars:
+      - key: KEEP_ALIVE
+        value: "true" 
